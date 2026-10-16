@@ -270,7 +270,7 @@ class Actor {
       down_fade: ['down-fade', 'down'], enrage: ['enrage', 'idle'], stalk: ['stalk', 'idle'],
     };
     // X.clipFor may answer with a list (the finisher families, in round-robin order).
-    const candidates = [clip].concat(X.clipFor ? (X.clipFor(clip, opts) || []) : [], aliases[clip] || []);
+    const candidates = [this.unit?.ch?.expeditionStoryCompanion && opts.companionClip, clip].concat(X.clipFor ? (X.clipFor(clip, opts) || []) : [], aliases[clip] || []);
     for (const candidate of candidates) {
       if (!candidate) continue;
       for (const id of [candidate, candidate.replace(/_/g, '-'), candidate.replace(/-/g, '_')]) {
@@ -408,6 +408,10 @@ class Actor {
       if(casting){
         const right=Math.max(...c.frames.map(name=>{const f=scene.textures.getFrame(sheet.key,name);return (f.x+f.width-sheet.canvas.pivot.x)*Math.abs(this._baseScaleX);}));
         castX=Math.min(originX,1252-right);
+        if(this.unit?.ch?.expeditionStoryCompanion){
+          const left=Math.min(...c.frames.map(name=>{const f=scene.textures.getFrame(sheet.key,name);return (f.x-sheet.canvas.pivot.x)*Math.abs(this._baseScaleX);}));
+          castX=Math.max(castX,28-left);
+        }
       }
       const pairedFinish = !!(target && /finisher/.test(clip) && opts.lethal);
       // Pair canvases are registered on the hero. Close to the embedded foe's
@@ -484,7 +488,7 @@ class Actor {
           this._sheathed = true;
           this.img.setFrame(c.frames[c.frames.length - 1]);
           this.idle();
-        } else if (clip === 'kneel' || /^down/.test(clip)) this.img.setFrame(c.frames[c.frames.length - 1]);
+        } else if (clip === 'kneel' || clip === 'knockout' || /^down/.test(clip)) this.img.setFrame(c.frames[c.frames.length - 1]);
         else this.idle();
         finish(false);
       };

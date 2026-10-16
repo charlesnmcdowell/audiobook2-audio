@@ -138,6 +138,17 @@ function splitEvents(events) {
 
 // DOT ticks and other round-boundary events (from peek or the tail of a step).
 async function playTicks(scene, events) {
+  for(const e of events)if(e.t==='revive'){
+    const a=actorOf(scene,e.uid),id=a?.unit?.ch?.expeditionStoryCompanion;
+    if(!id||scene.ended)continue;
+    a.alive=true;a.root.setVisible(true);a.root.setAlpha(1);a.plate.setVisible(true);
+    const ix=X.Story.Companions.kits[id].skills.indexOf(e.skillId);
+    if(ix>=0){
+      V().damageNumber(scene,a.x,a.y-a.height-50,A.DATA.SKILLS[e.skillId]?.name||e.skillId,'#d7eaf3');
+      await a.play('cast',{companionClip:'signature-'+(ix+1),target:a,holdRelease:true,onRelease:(from,clip)=>X.StoryEffects.play(scene,e.skillId,from,a.chest(),{height:a.height,clip,companion:true})});
+    }
+    a.refresh();
+  }
   const ticks = events.filter(e => e.t === 'damage' && e.tag === 'dot');
   for (const e of ticks) {
     const tgt = actorOf(scene, e.uid); if (!tgt) continue;
@@ -170,6 +181,12 @@ async function playDowns(scene, downs, events, byFinisher) {
   for (const e of downs) {
     const target = actorOf(scene, e.uid);
     if (!target || !target.alive || target._destroyed) continue;
+    if (target.unit?.ch?.expeditionStoryCompanion) {
+      if(target.unit.chp>0&&!target.unit.downed)continue; // Defiant Stand already restored this ally.
+      await target.play('knockout');if(scene.ended||target._destroyed)continue;
+      target.alive=false;target.plate.setVisible(false);for(const badge of target.badges.values())badge.setVisible(false);
+      await target.tween({alpha:0},250);target.root.setVisible(false);continue;
+    }
     if (target.__finisherPresented) { await target.play('down_fade'); continue; }
     const source = e.by || [...(events || [])].reverse().find(p => p.uid === e.uid && ['damage', 'execute'].includes(p.t))?.by;
     const sourceActor = actorOf(scene, source);
@@ -216,13 +233,17 @@ async function heroAction(scene, hero, g, step) {
     } });
   } else if (skill === 'god_aura') {
     // Iaido Draw (Hiro, 2026-10-13): one drawn cut through every enemy. Plays
-    // the painted 'iaido' clip once delivered; until then the widest slash.
+    // the registered sixteen-drawing draw, contact and re-sheathing sequence.
     const first = hits[0] ? targetOf(hits[0]) : actorOf(scene, e.target);
     if (!scene.__cine) V().zoomPunch(scene);
     sfx(scene, 'slash', 'use');
     await hero.play('iaido', { target: first, level, lethal: false, onContact: () => {
       sfx(scene, 'slash', 'hit');
       V().flashOverlay(scene, 0xffffff, 0.18);
+      const start=hero.chest(),end=Math.max(start.x+80,...hits.map(h=>targetOf(h)?.chest().x||start.x));
+      const streak=scene.add.rectangle((start.x+end)/2,start.y,end-start.x,4,0xfffcf2,.95).setDepth(650).setName('iaido_blade_streak');
+      const clear=()=>streak.destroy();scene.events.once('shutdown',clear);
+      scene.tweens.add({targets:streak,alpha:0,scaleY:.2,duration:160,onComplete:()=>{scene.events.off('shutdown',clear);clear();}});
       hits.forEach((h, i) => deferImpact(scene, i * 90, () => impact(scene, targetOf(h), h, { arc: 0xfff4d6, hitStop: i === 0, shake: 0.005 })));
       showDefences(scene, hero, g);
     } });
@@ -386,6 +407,7 @@ async function enemyAction(scene, foe, g) {
 
 // ---------------------------------------------------------------- companion actions
 async function allyAction(scene, ally, g) {
+  if(ally.unit?.ch?.expeditionStoryCompanion)return storyCompanionAction(scene,ally,g);
   const e = g.use;
   const targetOf = ev => actorOf(scene, ev.uid);
   const hits = g.after.filter(x => x.t === 'damage' && x.tag !== 'dot' && x.by === ally.uid);
@@ -402,6 +424,38 @@ async function allyAction(scene, ally, g) {
   // A companion's kill is an ordinary kill: only Hiro's tapped Finisher finishes.
   sfx(scene, 'slash', 'use');
   await ally.play('slash', { target: first, lethal: false, onContact: () => { sfx(scene, 'slash', 'hit'); hits.forEach((h, i) => deferImpact(scene, i * 60, () => impact(scene, targetOf(h), h, { arc: 0xe8dfc8, hitStop: i === 0 }))); } });
+}
+
+async function storyCompanionAction(scene,ally,g){
+  const id=g.use.skillId,kit=X.Story.Companions.kits[ally.unit.ch.expeditionStoryCompanion],ix=kit.skills.indexOf(id);
+  const companionClip=ix<0?'attack':'signature-'+(ix+1);
+  const entry=ally.unit.ch.actives.find(e=>e.skillId===id)||{skillId:id,level:1};
+  const sk=A.SkillSys.manifest(ally.unit.ch,entry).data;
+  const hits=g.after.filter(e=>e.t==='damage'&&e.by===ally.uid&&e.tag!=='dot');
+  const target=actorOf(scene,g.use.target)||ally;
+  const bowBasic=id==='basic_attack'&&/bow/i.test(kit.weapon);
+  const effectId=bowBasic?'aimed_shot':id;
+  const ranged=bowBasic||sk.elemental||(sk.reach==='any'&&!sk.melee&&!sk.katana);
+  const support=['self','party','ally','deadAlly'].includes(sk.target);
+  const soundFamily=support?(/mend|regen|blood_pact/.test(id)?'heal':'guard'):ranged?(sk.elemental?'magic':'projectile'):'slash';
+  sfx(scene,soundFamily,'use');
+  V().damageNumber(scene,ally.x,ally.y-ally.height-60,A.DATA.SKILLS[id]?.name||id,'#d7eaf3');
+  let landed=false;
+  const land=()=>{
+    if(landed||scene.ended)return;landed=true;
+    if(hits.some(e=>e.dmg>0))sfx(scene,soundFamily,'hit');
+    for(const e of hits)impact(scene,actorOf(scene,e.uid),e,{arc:0xe8dfc8,hitStop:true});
+    for(const e of g.after.filter(e=>e.t==='heal')){const a=actorOf(scene,e.uid);if(a){V().healSparkle(scene,a.x,a.y-a.height*.5);a.refresh();}}
+    showDefences(scene,ally,g);
+    for(const a of scene.actors.values())a.refresh();
+  };
+  if(ranged||support){
+    let flight=null;
+    if(!X.StoryEffects.supports(effectId,{companion:true}))throw Error('Companion effect art not ready: '+effectId);
+    await ally.play('cast',{companionClip,target,holdRelease:true,onRelease:(from,clip)=>{
+      flight=X.StoryEffects.play(scene,effectId,from,target.chest(),{height:ally.height,clip,companion:true}).then(land);return flight;
+    }});if(flight)await flight;
+  }else await ally.play('slash',{companionClip,target,onContact:land});
 }
 
 // A human foe: a spell or shot is a cast and a bolt; anything else a lunge.
@@ -427,11 +481,28 @@ async function humanAction(scene, foe, hero, g, r) {
   const color = ELEMENT_COLOR[sk.element] || 0xe8dfc8;
   const answer = async () => {
     if(scene.ended||foe._destroyed||hero._destroyed||scene.actors.get(foe.uid)!==foe)return;
+    // A volley or cleave can hit both companions as well as the primary victim.
+    // Show every resolved recipient at contact, before any knockout is staged.
+    const secondary=[];
+    for(const target of scene.actors.values()){
+      if(target===hero||target.side===foe.side||!target.alive||target._destroyed)continue;
+      const events=g.after.filter(e=>e.uid===target.uid&&e.tag!=='dot'&&(!e.by||e.by===foe.uid));
+      const damage=events.filter(e=>e.t==='damage');
+      if(events.some(e=>e.t==='evade'))outcome(scene,target,'evade','Miss');
+      else if(events.some(e=>['counter','blocked','ward','shieldAbsorb'].includes(e.t)))outcome(scene,target,'guard','Blocked');
+      else if(damage.some(e=>e.dmg>0))secondary.push(target.play('hit_short'));
+      for(const event of damage)impact(scene,target,event,{burst:color});
+      if(damage.length&&!damage.some(e=>e.dmg>0))outcome(scene,target,'resist','0');
+    }
+    secondary.forEach(work=>trackImpact(scene,work));
     if (r.counter) {
       sfx(scene, 'block', 'block');
       V().damageNumber(scene,hero.x,hero.y-hero.height*.65,'Blocked','#bce5ff');
-      await hero.play(ranged ? 'deflect' : 'intercept', { onContact: () => { const c = hero.contactPoint(foe); V().burst(scene, c.x, c.y - 40, 0xfff2b0, 10); hitStop(scene, TM().hitStop); } });
-      if (ranged) await deflect(scene, hero, foe, color, g.after.find(x => x.t === 'damage' && x.uid === foe.uid && x.tag === 'reflect'),g.use.skillId);
+      let reflected=null;
+      await hero.play(ranged ? 'deflect' : 'intercept', { onContact: () => { const c = hero.contactPoint(foe); V().burst(scene, c.x, c.y - 40, 0xfff2b0, 10); hitStop(scene, TM().hitStop);
+        if(ranged)reflected=deflect(scene,hero,foe,color,g.after.find(x=>x.t==='damage'&&x.uid===foe.uid&&x.tag==='reflect'),g.use.skillId);
+      } });
+      if(reflected)await reflected;
       if (r.riposte) { sfx(scene, 'slash', 'use'); await hero.play('riposte', { target: foe, onContact: () => { sfx(scene, 'slash', 'hit'); if (r.riposteHit) impact(scene, foe, r.riposteHit, { arc: 0xe8dfc8, hitStop: true }); if (r.riposteKill) V().burst(scene, foe.chest().x, foe.chest().y, 0xd9c2ff, 12); } }); }
       if (r.hit) impact(scene, hero, r.hit, {});
     } else if (r.evade) { sfx(scene, 'miss', 'miss'); V().damageNumber(scene,hero.x,hero.y-hero.height*.6,'Miss','#d7eaf3'); await hero.play('roll'); }
@@ -507,10 +578,10 @@ Beats.play = async function (scene, step) {
     else await perform();
   } else if (step.choice && step.choice.action && step.choice.action.kind === 'hold') {
     await wait(scene, 200);
-  } else if (!g.pre.length) {
-    await wait(scene, 60);
   } else if (g.down.length) {
     await playDowns(scene, g.down, step.events);
+  } else if (!g.pre.length) {
+    await wait(scene, 60);
   }
   for (const a of scene.actors.values()) if (a.alive) a.refresh();
   // Boss second wind: once, the first time it drops under its threshold.
