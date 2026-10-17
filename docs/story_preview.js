@@ -15,7 +15,7 @@ const DEMO_THROUGH=1,localHost=/^(localhost|127\.0\.0\.1)$/.test(location.hostna
 // to five "if they know password"). UNLOCK_THROUGH above DEMO_THROUGH turns it on;
 // the site packager sets both. Only a SHA-256 of the lower-cased password is
 // here. It is a casual gate: the chapters' files ship with the page.
-const UNLOCK_THROUGH=6,UNLOCK_HASH='e2324f665ae42249ee042331e8e804bb24aa492e123ca40ea13ac9fa0ab56de9',UNLOCK_KEY='adventurer_expeditions_unlocked';
+const UNLOCK_THROUGH=14,UNLOCK_HASH='e2324f665ae42249ee042331e8e804bb24aa492e123ca40ea13ac9fa0ab56de9',UNLOCK_KEY='adventurer_expeditions_unlocked';
 const unlocked=()=>{try{return localStorage.getItem(UNLOCK_KEY)===UNLOCK_HASH;}catch(_){return false;}};
 const askedThrough=Number(new URLSearchParams(location.search).get('through'));
 const PLAYABLE_THROUGH=unlocked()?Math.max(DEMO_THROUGH,UNLOCK_THROUGH):DEMO_THROUGH;
