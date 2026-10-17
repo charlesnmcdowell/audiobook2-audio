@@ -188,7 +188,19 @@ function render(){
   companionUI.stop();stopVoice();panel.replaceChildren();const r=session.record;
   if(r.hiroChoice)return hiroChoice();
   // Cap the outbound leg before showing content from a locked website chapter.
-  if(r.travelPending&&r.travelPending.chapter<=PLAYABLE_THROUGH)return travel();
+  // Road trips only when leaving the inn (a chapter's very start) or heading
+  // back to it (the chapter is over). A trip found anywhere else, such as a
+  // stale one left in a save, is dropped instead of playing between fights
+  // (Hiro, 2026-10-17).
+  if(r.travelPending){
+    // Only the trip back to the inn, and a city chapter's rooftop climb right
+    // before its boss. Anything else (old outbound trips in saves) is dropped.
+    const t=r.travelPending,last=session.game.quest.quest.encounters.length-1;
+    const toInn=t.leg==='return'&&(r.phase==='arrival'||r.phase==='inn');
+    const toBoss=t.leg==='boss'&&r.phase==='opener'&&r.encounter===last;
+    if(!toInn&&!toBoss){S.finishTravel(session);return render();}
+    if(t.chapter<=PLAYABLE_THROUGH)return travel();
+  }
   const perks=ADV.GatePerks?.state(session.game);
   if(perks?.pending.length){
     const notices=perks.pending.slice(),box=text('section','',panel,'menu');text('h1','Campaign gifts',box);
@@ -252,7 +264,7 @@ function travel(){
   const activeSession=session,spec=S.travelSpec(session);if(!spec){S.finishTravel(session);render();return;}
   sceneContext=null;$('weather').hidden=true;playMusic();backdrop.pause(false);
   // Leave the entire painting visible; the title/sound controls remain usable.
-  const note=text('div',spec.leg==='return'?'Returning to the inn':'On the road',panel,'travel-caption');
+  const note=text('div',(spec.storyLeg||spec.leg)==='return'?'Returning to the inn':spec.storyLeg==='boss'?'Over the rooftops':'On the road',panel,'travel-caption');
   note.style.cssText='position:fixed;bottom:max(18px,env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);color:#fff;text-shadow:0 2px 4px #000;pointer-events:none';
   const id=spec.id;
   backdrop.show({...spec,onComplete:()=>{

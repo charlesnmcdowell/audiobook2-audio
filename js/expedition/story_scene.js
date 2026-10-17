@@ -43,9 +43,11 @@ class StoryBattle extends X.Scene{
       // Wide shields/staves must not clip against the left edge.
       const ext=this.idleExtents(a);
       a.root.x=a.home.x=Math.max(a.home.x,24-ext.left);
-      a.syncPerspective();
+      this.placeOnGround(a);
+      a.root.x=a.home.x=Math.max(a.home.x,24-this.idleExtents(a).left);this.placeOnGround(a);
       this.actors.set(u.uid,a);a.refresh(true);
     });
+    this.spreadParty();
   }
   // A Retry restarts this scene, and shutdown paused the old track: resume it
   // instead of returning early, which left every retried fight silent (Hiro,
@@ -56,23 +58,23 @@ class StoryBattle extends X.Scene{
     super.spawnFoes();
     this.foeSlots=[...this.actors.values()].filter(a=>a.side==='b').map(a=>({...a.home})).sort((a,b)=>a.x-b.x);
   }
+  groundProfile(){return S.Stage.groundProfiles[this.location]||super.groundProfile();}
   async reformFoes(){
     if(this.ended||!this.hero?.alive||this.hero.unit.chp<=0||!this.foeSlots)return;
     const alive=[...this.actors.values()].filter(a=>a.side==='b'&&a.alive&&!a._destroyed&&a.unit.chp>0)
       .sort((a,b)=>a.home.x-b.home.x);
-    // Fill original rear slots; never add an offset repeatedly or shrink foes.
-    const slots=this.foeSlots.slice(-alive.length);
-    await Promise.all(alive.map(async(a,i)=>{
-      const slot=slots[i];a.home.y=a.groundY=slot.y;
-      const ext=this.idleExtents(a);
-      a.home.x=Math.max(a.home.x,Math.min(slot.x,1252-ext.right));
-      a.root.setDepth(105-2*(this.foeSlots.length-alive.length+i));
+    if(!alive.length)return;
+    const origins=alive.map(a=>({x:a.root.x,y:a.root.y}));
+    // Re-solve for the survivors' actual widths instead of assigning a big
+    // survivor to a dead small enemy's slot. Leave more room ahead after a kill.
+    const lost=this.foeSlots.length-alive.length;
+    this.spaceFoes(alive,Math.min(835,735+lost*40));
+    alive.forEach((a,i)=>{a.root.x=origins[i].x;a.root.y=origins[i].y;a.syncPerspective();});
+    await Promise.all(alive.map(async a=>{
       if(Math.abs(a.root.x-a.home.x)>1||Math.abs(a.root.y-a.home.y)>1)await a.play('walk',{x:a.home.x,y:a.home.y,duration:340});
     }));
   }
-  spaceFoes(foes){
-    super.spaceFoes(foes);
-  }
+
   // The first two fights the player actually fights hold for the lessons
   // (Counter, Finisher, God Aura on a boss); a bypassed fight, such as sparing
   // Nib, doesn't use one up. Retries of those fights keep them (Hiro, 2026-10-12).
