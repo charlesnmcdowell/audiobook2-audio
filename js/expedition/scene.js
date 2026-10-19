@@ -12,8 +12,7 @@ const FOE_X = [850, 1000, 1140];
 const wait = (scene, t) => new Promise(r => scene.time.delayedCall(t, r));
 
 class ExpeditionScene extends Phaser.Scene {
-  // Matter.js (bundled in Phaser) for battlefield props, X.Props. Idle when a location has none.
-  constructor() { super({ key: 'Expedition', physics: { matter: { gravity: { y: 1.6 }, enableSleeping: true } } }); }
+  constructor() { super({ key: 'Expedition' }); }
 
   init(data) { this.opts = data || {}; }
 
@@ -24,6 +23,8 @@ class ExpeditionScene extends Phaser.Scene {
     X.UI.preloadBusts(this);
     X.DefeatFX.preload(this);
     X.BattleStage.preload(this);
+    // Arcade casters and archers use the same authored effects as story foes.
+    if(X.Painted.needed(this).some(id=>X.monsterActors.includes(id)))X.StoryEffects?.preload(this);
   }
 
   // The painted sheet descriptor for Actor, or null while the plates stand in.
@@ -62,7 +63,6 @@ class ExpeditionScene extends Phaser.Scene {
     this.game_.quest = { travel: { weather: X.Campaign.weatherFor(this.quest, this.world, this.phase) } };
     this.buildTextures(); X.UI.installBusts(this);
     this.env = X.BattleStage.paint(this, this.encs[this.run.wave].bg, this.phase);
-    if (X.Props) X.Props.spawn(this, this.encs[this.run.wave].bg);
     // The shared painted environment re-resolves ground weather, whose marsh
     // bias can override an explicitly clear quest. Keep the edition's declared
     // sky authoritative without changing the synced website renderer.
@@ -380,19 +380,23 @@ class ExpeditionScene extends Phaser.Scene {
   // ---------------------------------------------------------------- director
   async fight(first) {
     const enc = this.enc, Enc = X.Encounter;
+    // A loop belongs to one encounter. After a scene restart the intro's waits
+    // resolve (they finish on shutdown), and the old loop must not go on to take
+    // turns in the new fight (2026-10-20).
+    const gone = () => this.ended || this.enc !== enc;
     // Arcade: nothing to buy before a fight. Every skill is owned, and the
     // first quest teaches them one per fight inside the fight (guideSkillUse).
     await this.intro(first);
-    while (!this.ended) {
+    while (!gone()) {
       const pk = Enc.peek(enc);
       if (pk.events.length) await X.Beats.ticksOnly(this, pk.events);
-      if (this.ended) return;
+      if (gone()) return;
       if (pk.over || enc.st.over) break;
       this.hud.setSkillStates(Enc.skillStates(enc));
       // A tap made during the last animation fires here, before anyone's turn.
-      if (enc.request) { await this.drainCasts(); if (this.ended) return; if (enc.st.over) break; }
+      if (enc.request) { await this.drainCasts(); if (gone()) return; if (enc.st.over) break; }
       await this.guideSkillUse();
-      if (this.ended) return;
+      if (gone()) return;
       const before = enc.log.length;
       const step = Enc.step(enc);
       // Say what happened to a tap that could not fire. Silence here is what
@@ -405,7 +409,7 @@ class ExpeditionScene extends Phaser.Scene {
       if (step.hero && step.choice && step.choice.how === 'request') this.hud.fired(step.choice.action.skillId, this.hero.x, this.hero.y - this.hero.height * 0.55);
       if (step.hero && !enc.request) this.hud.setQueued(null);
       await X.Beats.play(this, step);
-      if (this.ended) return;                        // the run was ended from the pause menu mid-beat
+      if (gone()) return;                        // the run was ended from the pause menu mid-beat
       this.hud.setSkillStates(Enc.skillStates(enc));
       if (step.over || enc.st.over) break;
       this.storyBanter?.();
@@ -416,26 +420,33 @@ class ExpeditionScene extends Phaser.Scene {
       // lands during it fires inside the gap rather than waiting for a turn:
       // the wait is sliced so the delay a player feels is a fraction of a second.
       const pause = X.turnPauseMs ? X.turnPauseMs() : 0;
-      for (let left = pause; left > 0 && !this.ended && !enc.st.over; left -= 120) {
+      for (let left = pause; left > 0 && !gone() && !enc.st.over; left -= 120) {
         await wait(this, Math.min(120, left));
-        if (enc.request) { await this.drainCasts(); if (this.ended) return; }
+        if (enc.request) { await this.drainCasts(); if (gone()) return; }
       }
-      if (this.ended) return;
+      if (gone()) return;
       if (enc.st.over) break;
       // Pause the moment a swing first opens Finisher, not only on Hiro's next
       // turn — by then Katana Slash had often already spent the window.
       await this.guideSkillUse();
-      if (this.ended) return;
+      if (gone()) return;
     }
-    if (this.ended) return;
+    if (gone()) return;
     if (Enc.won(enc)) await this.victory(); else await this.defeat();
   }
 
   async intro(first) {
+    if (X.Entrances) return X.Entrances.begin(this, first);
     // Foes pour in from the right while Hiro plants and draws (a short draw on later waves).
     const foes = [...this.actors.values()].filter(a => a.side === 'b');
     const ambush = !!this.enc.def.ambush;
-    const enters = foes.map((a, i) => wait(this, i * (ambush ? 90 : 180)).then(() => a.play('enter', { from: a.root.x, duration: ambush ? 420 : a.kind === 'plant' ? 900 : 720 })));
+    const enters = foes.map((a, i) => wait(this, i * (ambush ? 90 : 180)).then(async () => {
+      if(this.ended||a._destroyed)return;
+      if(a.sheet?.clips.entrance){
+        a.root.setPosition(a.home.x,a.home.y);a.syncPerspective();
+        await a.play('entrance');
+      }else await a.play('enter', { from: a.root.x, duration: ambush ? 420 : a.kind === 'plant' ? 900 : 720 });
+    }));
     if (ambush) {
       // Jumped on the road: a red flash, the rivals pour in fast, the party draws late.
       A.VFX.flashOverlay(this, 0xc0392b, 0.35);

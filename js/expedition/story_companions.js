@@ -15,17 +15,17 @@ P.kits={
  ysolde:{join:3,weapon:'Talisman fans',skills:['frost_touch','rime_grasp'],height:315},
  aurelius:{join:3,weapon:'Hooked wizard staff',skills:['fire_bolt','spark'],height:345},
  ilvara:{join:5,weapon:'Priestess’s sceptre',skills:['wither_touch','blood_pact'],height:320},
- faelen:{join:6,weapon:'Shortbow and dagger',skills:['aimed_shot','backstab'],height:320},
+ faelen:{join:6,weapon:'Shortbow',skills:['aimed_shot','backstab'],height:320},
  nettle:{join:6,weapon:'Thorn and bone gauntlets',skills:['thorn_skin','wither_touch'],height:310},
  durnik:{join:7,weapon:'Warhammer and shield',skills:['mend','regenerate'],height:245},
  amara:{join:13,weapon:'Twin sabres',skills:['dual_swords','counter_attack'],height:330},
 };
+P.bows=new Set(['ithrel','faelen']);
 P.clips=['idle','walk','attack','signature-1','signature-2','hit','knockout','victory'];
 // Spellcasters keep a free, reliable basic action while their signatures recharge.
 // Same power/cost/statuses; only the edition's copies become ranged spells.
-// Hiro's exceptions (2026-10-18): Santiago, Wanjiru and Dai Morgan keep weapons.
+// Hiro's exceptions (2026-10-18): Winston, Santiago, Wanjiru and Dai Morgan keep weapons.
 P.casters={vess:{name:'Ember Bolt',effect:'ember_lash',element:'fire',clip:'signature-1'},
- fennick:{name:'Shadow Bolt',effect:'whisper_of_ending',element:'shadow',clip:'signature-2',spellClips:{venom_fang:'signature-2'},effects:{venom_fang:'poison_spray'}},
  aurelius:{name:'Fire Bolt',effect:'fire_bolt',element:'fire',clip:'signature-1'},
  ysolde:{name:'Frost Bolt',effect:'frost_touch',element:'ice',clip:'signature-1'},
  selene:{name:'Thorn Bolt',effect:'thorn_lash',element:'nature',clip:'signature-2'},
@@ -39,8 +39,18 @@ P.formAttack=function(actor,skill){
  return [null,'bear',null,'eagle'][beat%4];
 };
 P.eligible=s=>s.record.chapter<2?[]:C.companyIds(s.game).filter(id=>P.kits[id]?.join<=s.record.chapter&&C.isRecruited(s.game,id));
+// The recommended party is the two newest recruits, so every companion gets a
+// turn (Hiro, 2026-10-19). It is the default at the start of each chapter and
+// again whenever someone new joins; a player's own pick lasts until then.
+P.recommended=function(s){
+ const recruited=C.state(s.game).recruited||[];
+ return P.eligible(s).slice().sort((a,b)=>recruited.indexOf(b)-recruited.indexOf(a)).slice(0,P.fieldMax);
+};
+P.selectionKey=s=>s.record.chapter+'|'+(C.state(s.game).recruited||[]).length;
+P.isRecommended=(s,ids=P.selected(s))=>{const r=P.recommended(s);return ids.length===r.length&&r.every(id=>ids.includes(id));};
 P.selected=function(s){
  const eligible=P.eligible(s),saved=s.record.fightingCompanions;
+ if(s.record.companionSelectionKey!==P.selectionKey(s))return P.recommended(s);
  // Explicit empty / one-member selections are choices, not missing data.
  if(Array.isArray(saved)){
   const valid=[...new Set(saved)].filter(id=>eligible.includes(id)).slice(0,P.fieldMax);
@@ -55,13 +65,13 @@ P.selected=function(s){
 };
 P.select=function(s,ids,{explicit=true}={}){
  if(!Array.isArray(ids)||ids.length>P.fieldMax||new Set(ids).size!==ids.length||ids.some(id=>!P.eligible(s).includes(id)))throw Error('Choose up to two riding companions');
- s.record.fightingCompanions=ids.slice();s.record.companionSelectionExplicit=explicit;S.save(s);return ids;
+ s.record.fightingCompanions=ids.slice();s.record.companionSelectionExplicit=explicit;s.record.companionSelectionKey=P.selectionKey(s);S.save(s);return ids;
 };
 P.readiness=s=>P.selected(s).filter(id=>!P.bindings[id]?.ready).map(id=>'companion:'+id);
 P.register=function(id,atlas){
  if(!P.kits[id])throw Error('Unknown companion '+id);
  for(const name of P.clips){const clip=atlas?.clips?.[name];
-  if(!clip||clip.paired||clip.frames?.length<16||new Set(clip.frames).size!==clip.frames.length)throw Error('Incomplete companion clip '+id+'/'+name);
+  if(!clip||clip.paired||clip.frames?.length<(name==='idle'&&clip.technicalCalmLoop?4:16)||new Set(clip.frames).size!==clip.frames.length)throw Error('Incomplete companion clip '+id+'/'+name);
  }
  P.bindings[id]={actor:'companion_'+id,ready:true,height:P.kits[id].height};
 };
@@ -140,6 +150,15 @@ A.SkillSys.manifest=function(ch,entry){
  const m=oldManifest.call(this,ch,entry);
  if(!ch?.expeditionStoryCompanion)return m;
  const caster=P.casters[ch.expeditionStoryCompanion];
+ if(P.bows.has(ch.expeditionStoryCompanion)&&['basic_attack',...P.kits[ch.expeditionStoryCompanion].skills].includes(entry.skillId)){
+  const names=ch.expeditionStoryCompanion==='ithrel'?{aimed_shot:'Sky Volley',snare:'Pinning Shot'}:{backstab:'Tumbling Triple Shot'};
+  return {...m,data:{...m.data,name:names[entry.skillId]||m.data.name,elemental:false,element:undefined,reach:'any',melee:false,katana:false,
+    ...(entry.skillId==='basic_attack'?{}:{cooldown:Math.max(3,m.data.cooldown||0)})}};
+ }
+ // Winston delivers his lingering wound with the hooked knife. Keep the
+ // source skill ID, power, status payload and cooldown; no free shadow bolt.
+ if(ch.expeditionStoryCompanion==='fennick'&&entry.skillId==='whisper_of_ending')
+  return {...m,data:{...m.data,name:'Ending Cut',desc:'A hooked-knife cut that leaves a lingering wound and prevents healing.',elemental:false,element:undefined,reach:'front',melee:true,katana:false,cooldown:Math.max(3,m.data.cooldown||0)}};
  if(entry.skillId==='basic_attack'){
   return caster?{...m,data:{...m.data,name:caster.name,elemental:true,
     element:caster.element,reach:'any',melee:false,katana:false}}:m;

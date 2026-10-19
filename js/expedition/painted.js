@@ -40,6 +40,7 @@ P.needed = function (scene) {
 P.preload = function (scene, ids) {
   if (X.Hud && X.Hud.preloadArt) X.Hud.preloadArt(scene);
   const needed = ids || P.needed(scene);
+  if (X.Entrances) X.Entrances.preload(scene, needed);
   if (X.HumanoidGore) X.HumanoidGore.preload(scene,needed);
   if (X.EnemyFinishers) X.EnemyFinishers.preload(scene, needed);
   for (const id of needed) {
@@ -106,7 +107,6 @@ P.present = function (scene, environment, onReady) {
     scene.game.events.once('postrender', afterRender);
   }).catch(() => { if (active) P.failed(scene, 'Scenery could not load.'); });
 };
-UI.preloadHiroSheet = P.preload;
 UI.paintedFigure = function (scene, id, x, bottom, height, depth, requested) {
   const s = P.sheet(scene, id); if (!s) return null;
   const name = s.clips[requested] ? requested : 'idle', c = s.clips[name]; if (!c) return null;
@@ -125,7 +125,6 @@ UI.paintedFigure = function (scene, id, x, bottom, height, depth, requested) {
   scene.events.on('update', pause); sp.once('destroy', () => scene.events.off('update', pause));
   return sp;
 };
-UI.hiroFigure = (scene, x, bottom, height, depth, clip) => UI.paintedFigure(scene, 'hiro', x, bottom, height, depth, clip || 'idle');
 UI.ensureHiroTextures = function (scene) {
   if (scene.textures.exists('xp_hiro_face')) return;
   const s = P.sheet(scene, 'hiro'); if (!s) return;

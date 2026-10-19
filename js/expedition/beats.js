@@ -104,8 +104,6 @@ function impact(scene, tgt, e, opts) {
   V().damageNumber(scene, p.x + (Math.random() - 0.5) * 30, p.y - 20, e.dmg, dmgColor(e));
   tgt.refresh();
   recoil(scene, tgt, e);
-  // Battlefield props near the blow get knocked away from it (X.Props).
-  if (X.Props && tgt.unit && tgt.unit.maxHp) X.Props.blast(scene, tgt.root.x, tgt.root.y - 40, tgt.side === 'b' ? 1 : -1, 6 + 10 * Math.min(1, (e.dmg || 0) / tgt.unit.maxHp));
   // A painted clip brings its own impact parameters (X.impact, GDD §10.1);
   // placeholder motion keeps the timing table's single hit-stop.
   const im = opts.clip && X.impact && X.impact[opts.clip];
@@ -140,6 +138,15 @@ function splitEvents(events) {
 async function playTicks(scene, events) {
   for(const e of events)if(e.t==='revive'||e.t==='selfRevive'){
     const a=actorOf(scene,e.uid),id=a?.unit?.ch?.expeditionStoryCompanion;
+    if(e.skillId==='shadow_rise'&&a&&a.unit?.chp>0&&!a.unit.downed&&!scene.ended){
+      const seen=scene.__risen||(scene.__risen=new Set());
+      if(!seen.has(a.uid)){
+        seen.add(a.uid);(scene.__smoked ||= new Set()).add(a.uid);
+        V().damageNumber(scene,a.x,a.y-a.height*.7,'Shadow Rise','#d7c4ff');
+        await X.StoryEffects.resurrect(scene,a);
+      }
+      continue;
+    }
     // An enemy that cheats death (Shadow Rise) stays on the field; if its fall
     // was already shown, bring the body back instead of leaving it invisible.
     if(!id){if(a&&!scene.ended&&!a.alive&&a.unit.chp>0&&!a.unit.downed){a.restoreFromFade();a.refresh(true);}continue;}
@@ -173,6 +180,16 @@ const lethalTarget = (g, target) => !!target && g.down.some(d => d.uid === targe
 async function cinematic(scene, kind, actor, target, fn) {
   if (scene.__cine > 0 || !X.UI || !X.UI.cinematic) return fn();
   const focus = target ? { x: (actor.x + target.x) / 2, y: actor.y - actor.height * 0.45 } : { x: actor.x + 120 * actor.facing, y: actor.y - actor.height * 0.45 };
+  if(kind==='kill'&&target?.sheet?.clips&&scene.textures){
+    const sheet=target.sheet,pv=sheet.canvas.pivot,boxes=[];
+    for(const [id,c]of Object.entries(sheet.clips))if(/^hiro-finisher/.test(id)&&c.paired){
+      const scale=actor.height/sheet.standing*(c.bodyScale||1)*actor.perspectiveAt(target.y);
+      const distance=(c.pairTargetDistance??actor.height*(c.pairTargetDistanceRatio||.65))*actor.perspectiveAt(target.y);
+      const root=target.x-distance*actor.facing;
+      for(const name of c.frames){const f=scene.textures.getFrame(sheet.key,name);if(f)boxes.push({l:root+(f.x-pv.x)*scale,r:root+(f.x+f.width-pv.x)*scale,t:target.y+(f.y-pv.y)*scale,b:target.y+(f.y+f.height-pv.y)*scale});}
+    }
+    if(boxes.length)focus.bounds={left:Math.min(...boxes.map(b=>b.l)),right:Math.max(...boxes.map(b=>b.r)),top:Math.min(...boxes.map(b=>b.t)),bottom:Math.max(...boxes.map(b=>b.b))};
+  }
   return X.UI.cinematic(scene, kind, focus, fn);
 }
 
@@ -186,11 +203,11 @@ async function playDowns(scene, downs, events, byFinisher) {
   for (const e of downs) {
     const target = actorOf(scene, e.uid);
     if (!target || !target.alive || target._destroyed) continue;
-    // Shadow Rise (and Demigod) answer the killing blow at once: the engine
-    // reports the fall and then the rise. Show a stagger and a burst of smoke,
-    // never the death, or the living enemy would vanish from sight (2026-10-17).
-    if (target.side === 'b' && target.unit && target.unit.chp > 0 && !target.unit.downed) {
+    // A revive already restored by playTicks must not receive a second death.
+    // Shadow Rise owns its grave sequence; other revive skills keep their tells.
+    if (target.unit && target.unit.chp > 0 && !target.unit.downed && (events||[]).some(x=>x.uid===e.uid&&['revive','selfRevive'].includes(x.t))) {
       const rose = (events || []).find(x => (x.t === 'revive' || x.t === 'selfRevive') && x.uid === e.uid);
+      if(rose?.skillId==='shadow_rise'&&scene.__risen?.has(target.uid)){target.refresh();continue;}
       await Promise.all([target.play('hit_short'), target.smokePuff()]);
       if (scene.ended || target._destroyed) continue;
       (scene.__smoked ||= new Set()).add(target.uid);
@@ -448,18 +465,21 @@ async function storyCompanionAction(scene,ally,g){
   const caster=X.Story.Companions.casters[ally.unit.ch.expeditionStoryCompanion];
   const basicMagic=id==='basic_attack'&&caster;
   const form=X.Story.Companions.formAttack(ally,id);
-  const companionClip=form?'form-'+form:basicMagic?caster.clip:caster?.spellClips?.[id]||(ix<0?'attack':'signature-'+(ix+1));
+  const knifeEnding=ally.unit.ch.expeditionStoryCompanion==='fennick'&&id==='whisper_of_ending';
+  const bowId=ally.unit.ch.expeditionStoryCompanion,bow=X.Story.Companions.bows.has(bowId);
+  const volley=bowId==='ithrel'&&id==='aimed_shot',triple=bowId==='faelen'&&id==='backstab';
+  const companionClip=volley?'sky-volley':triple?'flip-burst':bowId==='ithrel'&&id==='snare'?'attack':knifeEnding?'signature-1':form?'form-'+form:basicMagic?caster.clip:caster?.spellClips?.[id]||(ix<0?'attack':'signature-'+(ix+1));
   const entry=ally.unit.ch.actives.find(e=>e.skillId===id)||{skillId:id,level:1};
   const sk=A.SkillSys.manifest(ally.unit.ch,entry).data;
   const hits=g.after.filter(e=>e.t==='damage'&&e.by===ally.uid&&e.tag!=='dot');
   const target=actorOf(scene,g.use.target)||ally;
   const bowBasic=id==='basic_attack'&&/bow/i.test(kit.weapon);
-  const effectId=basicMagic?caster.effect:caster?.effects?.[id]||(bowBasic?'aimed_shot':id);
-  const ranged=bowBasic||sk.elemental||(sk.reach==='any'&&!sk.melee&&!sk.katana);
+  const effectId=bow?'aimed_shot':basicMagic?caster.effect:caster?.effects?.[id]||(bowBasic?'aimed_shot':id);
+  const ranged=bow||bowBasic||sk.elemental||(sk.reach==='any'&&!sk.melee&&!sk.katana);
   const support=['self','party','ally','deadAlly'].includes(sk.target);
   const soundFamily=support?(/mend|regen|blood_pact/.test(id)?'heal':'guard'):ranged?(sk.elemental?'magic':'projectile'):'slash';
   sfx(scene,soundFamily,'use');
-  V().damageNumber(scene,ally.x,ally.y-ally.height-60,form?(form==='bear'?'Bear Swipe':'Eagle Dive'):basicMagic?caster.name:A.DATA.SKILLS[id]?.name||id,'#d7eaf3');
+  V().damageNumber(scene,ally.x,ally.y-ally.height-60,form?(form==='bear'?'Bear Swipe':'Eagle Dive'):basicMagic?caster.name:sk.name||id,'#d7eaf3');
   let landed=false;
   const land=()=>{
     if(landed||scene.ended)return;landed=true;
@@ -472,14 +492,22 @@ async function storyCompanionAction(scene,ally,g){
   if(ranged||support){
     let flight=null;
     if(!X.StoryEffects.supports(effectId,{companion:true}))throw Error('Companion effect art not ready: '+effectId);
+    const shots=[];
+    const shoot=(frame)=>{
+      const clip=ally.sheet.clips[companionClip],firing={...clip,releaseAnchor:clip.releaseAnchors?.[frame]||clip.releaseAnchor};
+      const p=X.StoryEffects.play(scene,'aimed_shot',ally.releasePoint(firing),target.chest(),{height:ally.height,clip:firing,companion:true});shots.push(p);return p;
+    };
     await ally.play('cast',{companionClip,target,holdRelease:true,
+     onContact:triple?()=>shoot(9):undefined,onHit:triple?()=>shoot(11):undefined,
      onWindup:(from,clip)=>X.StoryEffects.charge(scene,effectId,ally,clip,{companion:true}),onRelease:(from,clip)=>{
-      flight=X.StoryEffects.play(scene,effectId,from,target.chest(),{height:ally.height,clip,companion:true,cinematic:!['aimed_shot','kunai_line','suppressing_volley'].includes(effectId)}).then(land);return flight;
+      flight=(triple?(shoot(13),Promise.all(shots)):volley?X.StoryEffects.skyVolley(scene,from,target.chest(),ally.height):
+        X.StoryEffects.play(scene,effectId,from,target.chest(),{height:ally.height,clip,companion:true,cinematic:!['aimed_shot','kunai_line','suppressing_volley'].includes(effectId)})).then(land);return flight;
     }});if(flight)await flight;
   }else await ally.play('slash',{companionClip,target,
     // Wanjiru keeps her gauntlet strike; its nature magic charges on the fist.
     onWindup:!form&&id==='wither_touch'?(from,clip)=>X.StoryEffects.charge(scene,'thorn_lash',ally,clip,{companion:true}):undefined,
-    onContact:()=>{if(form||id==='wither_touch')X.StoryEffects.impact(scene,'thorn_lash',target.chest(),ally.height);land();}});
+    onContact:()=>{if(form||id==='wither_touch')X.StoryEffects.impact(scene,'thorn_lash',target.chest(),ally.height);
+      if(knifeEnding){const p=target.chest();V().slashArc(scene,p.x,p.y,0xbdcf95);}land();}});
 }
 
 // A human foe: a spell or shot is a cast and a bolt; anything else a lunge.
@@ -488,7 +516,7 @@ async function storyCompanionAction(scene,ally,g){
 // back into the shooter, who takes the bounced damage, before the riposte.
 async function deflect(scene, hero, foe, color, back, skillId) {
   const from = hero.contactPoint ? hero.contactPoint(foe) : hero.chest(), to = foe.chest();
-  if(scene.story&&X.StoryEffects?.supports(skillId))await X.StoryEffects.play(scene,skillId,from,to,{height:hero.height,reflected:true});
+  if(X.StoryEffects?.supports(skillId)&&(scene.story||scene.textures?.exists('story_effects_weapons')))await X.StoryEffects.play(scene,skillId,from,to,{height:hero.height,reflected:true});
   else await new Promise(res => {
     const bolt = scene.add.circle(from.x, from.y - 40, 9, color, 0.95).setDepth(650);
     scene.tweens.add({ targets: bolt, x: to.x, y: to.y, duration: 260, ease: 'Quad.In', onComplete: () => { bolt.destroy(); res(); } });
@@ -496,14 +524,16 @@ async function deflect(scene, hero, foe, color, back, skillId) {
   if (scene.ended || foe._destroyed) return;
   if (back) impact(scene, foe, back, { burst: color, hitStop: true, shake: 0.004 });
   else V().burst(scene, to.x, to.y, color, 10);
-  if (X.Props) X.Props.blast(scene, to.x, to.y, hero.facing, 9);
 }
 
 async function humanAction(scene, foe, hero, g, r) {
-  const sk = (A.DATA.SKILLS || {})[g.use && g.use.skillId] || {};
-  const id=g.use.skillId,weaponStatus=scene.story&&X.StoryEffects?.meleeStatus?.has(id);
-  const effectId=id==='killing_angle'?'aimed_shot':id;
-  const ranged = !weaponStatus&&(sk.elemental || (sk.reach === 'any' && !sk.melee && !sk.katana && sk.target && sk.target !== 'self'));
+  const id=g.use.skillId,entry=foe.unit.ch?.actives?.find(e=>e.skillId===id)||{skillId:id,level:1};
+  const sk = (A.SkillSys?.manifest&&foe.unit.ch?A.SkillSys.manifest(foe.unit.ch,entry)?.data:null) || (A.DATA.SKILLS||{})[id] || {};
+  const presentation=X.StoryEffects?.enemyAction?.(foe,id,sk)||{};
+  const weaponStatus=presentation.weaponStatus;
+  const effectId=presentation.effect||id;
+  const ranged = presentation.ranged??(!weaponStatus&&(sk.elemental || (sk.reach === 'any' && !sk.melee && !sk.katana && sk.target && sk.target !== 'self')));
+  const hasEffects=!!X.StoryEffects?.supports(effectId)&&(!!scene.story||scene.textures?.exists('story_effects_weapons'));
   const color = ELEMENT_COLOR[sk.element] || 0xe8dfc8;
   const answer = async () => {
     if(scene.ended||foe._destroyed||hero._destroyed||scene.actors.get(foe.uid)!==foe)return;
@@ -526,7 +556,7 @@ async function humanAction(scene, foe, hero, g, r) {
       V().damageNumber(scene,hero.x,hero.y-hero.height*.65,'Blocked','#bce5ff');
       let reflected=null;
       await hero.play(ranged ? 'deflect' : 'intercept', { onContact: () => { const c = hero.contactPoint(foe); V().burst(scene, c.x, c.y - 40, 0xfff2b0, 10); hitStop(scene, TM().hitStop);
-        if(ranged)reflected=deflect(scene,hero,foe,color,g.after.find(x=>x.t==='damage'&&x.uid===foe.uid&&x.tag==='reflect'),g.use.skillId);
+        if(ranged)reflected=deflect(scene,hero,foe,color,g.after.find(x=>x.t==='damage'&&x.uid===foe.uid&&x.tag==='reflect'),effectId);
       } });
       if(reflected)await reflected;
       if (r.riposte) { sfx(scene, 'slash', 'use'); await hero.play('riposte', { target: foe, onContact: () => { sfx(scene, 'slash', 'hit'); if (r.riposteHit) impact(scene, foe, r.riposteHit, { arc: 0xe8dfc8, hitStop: true }); if (r.riposteKill) V().burst(scene, foe.chest().x, foe.chest().y, 0xd9c2ff, 12); } }); }
@@ -536,7 +566,16 @@ async function humanAction(scene, foe, hero, g, r) {
     else showDefences(scene,foe,g);
   };
   if (!r.hit && !r.evade && !r.counter && ['self','party','ally','deadAlly','allyLane'].includes(sk.target)) {
-    if(scene.story&&X.StoryEffects?.supports(g.use.skillId)){
+    // Footwork and weapon guards use their own recovery/guard poses, never
+    // the generic healing sparkle. Magical wards take the painted path below.
+    const stance=X.StoryEffects?.stanceFor?.(id);
+    if(stance){
+      sfx(scene,stance==='roll'?'miss':'block','use');
+      await foe.play(stance);
+      V().damageNumber(scene,foe.x,foe.y-foe.height*.65,sk.name||g.use.name||id,'#c7dded');
+      foe.refresh();return;
+    }
+    if(hasEffects){
       const recipients=[...new Set(g.after.filter(e=>['heal','status','revive'].includes(e.t)).map(e=>actorOf(scene,e.uid)).filter(a=>a?.side===foe.side))];
       if(!recipients.length)recipients.push(foe);
       if(g.use.skillId==='smoke_bomb'){await foe.play('cast');(scene.__smoked||=new Set()).add(foe.uid);await foe.smokePuff();}
@@ -549,8 +588,8 @@ async function humanAction(scene, foe, hero, g, r) {
     V().aura(scene, foe.x, foe.y - foe.height * 0.5, color); foe.refresh(); return;
   }
   if (ranged) {
-    sfx(scene, sk.elemental ? 'magic' : 'projectile', 'use');
-    if(scene.story&&X.StoryEffects?.supports(g.use.skillId)){
+    sfx(scene, ['aimed_shot','kunai_line','suppressing_volley'].includes(effectId) ? 'projectile' : 'magic', 'use');
+    if(hasEffects){
       let flight=null;
       await foe.play('cast',{target:hero,holdRelease:true,onWindup:(from,clip)=>X.StoryEffects.charge?.(scene,effectId,foe,clip),onRelease:(from,clip)=>{
         flight=X.StoryEffects.play(scene,effectId,from,hero.chest(),{height:foe.height,clip,cinematic:!['aimed_shot','kunai_line','suppressing_volley'].includes(effectId)})
@@ -562,7 +601,7 @@ async function humanAction(scene, foe, hero, g, r) {
     }
     await foe.play('cast');
     const from = foe.chest(), to = hero.chest();
-    if(scene.story&&X.StoryEffects?.supports(g.use.skillId))await X.StoryEffects.play(scene,g.use.skillId,from,to);
+    if(hasEffects)await X.StoryEffects.play(scene,effectId,from,to);
     else await new Promise(res => { const bolt = scene.add.circle(from.x, from.y, sk.elemental ? 12 : 6, color, 0.95).setDepth(650); scene.tweens.add({ targets: bolt, x: to.x, y: to.y, duration: 220, ease: 'Power2', onComplete: () => { bolt.destroy(); res(); } }); });
     if(!scene.ended)await answer();
     return;
@@ -591,7 +630,7 @@ async function smokeOnHide(scene, events) {
 
 // ---------------------------------------------------------------- entry point
 Beats.play = async function (scene, step) {
-  scene.__smoked = new Set();
+  scene.__smoked = new Set(); scene.__risen = new Set();
   const g = splitEvents(step.events || []);
   await playTicks(scene, g.pre);
   // Round-boundary downs (a wolf bleeding out) happen before any action.
@@ -641,5 +680,5 @@ Beats.play = async function (scene, step) {
   for (const e of step.events) if (e.t === 'exposedBurst') { const t = actorOf(scene, e.uid); if (t) V().burst(scene, t.chest().x, t.chest().y, 0xf4c26b, 6); }
 };
 
-Beats.ticksOnly = async function (scene, events) { scene.__smoked = new Set(); await playTicks(scene, events); const downs = events.filter(e => e.t === 'down'); if (downs.length) await playDowns(scene, downs, events); await smokeOnHide(scene, events); await X.EnemyFinishers?.tryLowHealth(scene, events); };
+Beats.ticksOnly = async function (scene, events) { scene.__smoked = new Set(); scene.__risen = new Set(); await playTicks(scene, events); const downs = events.filter(e => e.t === 'down'); if (downs.length) await playDowns(scene, downs, events); await smokeOnHide(scene, events); await X.EnemyFinishers?.tryLowHealth(scene, events); };
 })();
