@@ -169,7 +169,7 @@ class ExpeditionScene extends Phaser.Scene {
     return (this.formationScale||1)*Math.max(.60,Math.min(1.08,1+(y-GROUND_Y)*.0019));
   }
 
-  groundProfile() { return [[0,530],[1280,530]]; }
+  groundProfile() { return X.BattleStage?.groundProfile(this.encs?.[this.run?.wave]?.bg)||[[0,530],[1280,530]]; }
   groundPoint(x,y,actor) {
     const line=this.groundProfile(),radius=Math.min(45,(actor?.height||250)*.12)*this.perspectiveAt(y);
     const floorAt=q=>{

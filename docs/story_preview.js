@@ -16,6 +16,9 @@ const DEMO_THROUGH=1,localHost=/^(localhost|127\.0\.0\.1)$/.test(location.hostna
 // the site packager sets both. Only a SHA-256 of the lower-cased password is
 // here. It is a casual gate: the chapters' files ship with the page.
 const UNLOCK_THROUGH=14,UNLOCK_HASH='e2324f665ae42249ee042331e8e804bb24aa492e123ca40ea13ac9fa0ab56de9',UNLOCK_KEY='adventurer_expeditions_unlocked';
+// Builds for itch.io and Newgrounds (tools/site_demo.js EXPEDITIONS_TARGET) set
+// this to the website: their last chapter points there instead of "coming soon".
+const CONTINUE_AT=null;
 const unlocked=()=>{try{return localStorage.getItem(UNLOCK_KEY)===UNLOCK_HASH;}catch(_){return false;}};
 const askedThrough=Number(new URLSearchParams(location.search).get('through'));
 const PLAYABLE_THROUGH=unlocked()?Math.max(DEMO_THROUGH,UNLOCK_THROUGH):DEMO_THROUGH;
@@ -308,8 +311,13 @@ function inn(){
 }
 function toBeContinued(){
   stopVoice();const r=session.record,X=ADV.Expedition,score=r.run.score||0,box=text('section','',panel,'menu demo-end');
-  text('h1','Chapter '+(PLAYABLE_THROUGH+1)+' is coming soon',box);
-  text('p',"That's as far as the story goes for now. Your save picks up right here when the next chapter lands.",box,'notice');
+  if(CONTINUE_AT){
+    text('h1','The story continues',box);
+    text('p','Chapters '+(PLAYABLE_THROUGH+1)+' to 14 are on Neverending Narratives. Chapter one is free there, and Patreon supporters get the password for the whole story.',box,'notice');
+  }else{
+    text('h1','Chapter '+(PLAYABLE_THROUGH+1)+' is coming soon',box);
+    text('p',"That's as far as the story goes for now. Your save picks up right here when the next chapter lands.",box,'notice');
+  }
   text('h2','Score: '+score+' points',box);
   const board=text('div','',box,'story-board');
   const list=()=>{board.replaceChildren();X.Board.load().forEach((row,i)=>text('div',(i+1)+'. '+row.name+' — '+row.score,board,'board-row'));};
@@ -321,7 +329,9 @@ function toBeContinued(){
   }
   list();if(X.board.note)text('p',X.board.note,box,'caption');
   passwordBox(box);
-  const buttons=text('div','',box,'buttons');button('Back to title',title,buttons);
+  const buttons=text('div','',box,'buttons');
+  if(CONTINUE_AT){button('Keep playing',()=>window.open(CONTINUE_AT,'_blank','noopener'),buttons);button('Patreon',()=>window.open('https://www.patreon.com/NeverendingNarratives','_blank','noopener'),buttons);}
+  button('Back to title',title,buttons);
 }
 function ending(){
   const end=P.ending(session),box=text('section','',panel);box.id='epilogue';

@@ -41,6 +41,7 @@ M.releasable = function (keys, keep, innKeys) {
     let m;
     if ((m = /^xp_(.+)_sheet$/.exec(key)) && actors.has(m[1]) && !keep.actors.has(m[1])) out.push(key);
     else if ((m = /^xp_(.+)_fatal$/.exec(key)) && !keep.actors.has(m[1])) out.push(key);
+    else if ((m = /^xp_battle_plate_(.+?)(_contact)?$/.exec(key))) { if (!keep.stages.has(m[1])) out.push(key); }
     else if (key === 'xp_battle_mountain_far') { if (!keep.stages.has('mountain')) out.push(key); }
     else if ((m = /^xp_battle_(.+)_(far|ground|near)$/.exec(key)) && !keepSets.has(m[1])) out.push(key);
     else if ((m = /^travel_(.+)_(plate|actions|far|ground|near|loops)$/.exec(key)) && !keep.travel.has(m[1])) out.push(key);
